@@ -24,7 +24,7 @@ import org.w3c.dom.NodeList;
 import org.xml.sax.SAXException;
 
 /**
- * Transforms a NUnit report into seperate JUnit reports. The NUnit report can contain several test cases and the JUnit
+ * Transforms a NUnit report into separate JUnit reports. The NUnit report can contain several test cases and the JUnit
  * report that is read by Jenkins should only contain one. This class will split up one NUnit report into several JUnit
  * files.
  * 
@@ -40,6 +40,7 @@ public class NUnitReportTransformer implements TestReportTransformer, Serializab
 
     private static final String TEMP_JUNIT_FILE_STR = "temp-junit.xml";
     public static final String NUNIT_TO_JUNIT_XSLFILE_STR = "nunit-to-junit.xsl";
+    public static final String NUNIT3_TO_JUNIT_XSLFILE_STR = "nunit3-to-junit.xsl";
 
     private transient boolean xslIsInitialized;
     private transient Transformer nunitTransformer;
@@ -77,7 +78,14 @@ public class NUnitReportTransformer implements TestReportTransformer, Serializab
             ParserConfigurationException {
         if (!xslIsInitialized) {
             TransformerFactory transformerFactory = TransformerFactory.newInstance();
-            nunitTransformer = transformerFactory.newTransformer(new StreamSource(this.getClass().getResourceAsStream(NUNIT_TO_JUNIT_XSLFILE_STR)));
+            try {
+                //Try version NUnit3 first 
+                nunitTransformer = transformerFactory.newTransformer(new StreamSource(this.getClass().getResourceAsStream(NUNIT3_TO_JUNIT_XSLFILE_STR)));
+            } catch(Exception ex){
+                //NUnit2 format, if this doesn't work, let exception bubble up.
+                nunitTransformer = transformerFactory.newTransformer(new StreamSource(this.getClass().getResourceAsStream(NUNIT_TO_JUNIT_XSLFILE_STR)));
+            }
+            
             writerTransformer = transformerFactory.newTransformer();
     
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
