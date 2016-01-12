@@ -3,6 +3,7 @@ package hudson.plugins.nunit;
 import hudson.AbortException;
 import hudson.EnvVars;
 import hudson.Extension;
+import hudson.FilePath;
 import hudson.FilePath.FileCallable;
 import hudson.Launcher;
 import hudson.Util;
@@ -11,6 +12,8 @@ import hudson.model.BuildListener;
 import hudson.model.Result;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
+import hudson.model.Run;
+import hudson.model.TaskListener;
 import hudson.remoting.VirtualChannel;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
@@ -25,10 +28,11 @@ import java.io.IOException;
 import java.io.Serializable;
 
 import javax.xml.transform.TransformerException;
-
+import jenkins.tasks.SimpleBuildStep;
 import org.apache.commons.lang.BooleanUtils;
 import org.apache.tools.ant.DirectoryScanner;
 import org.apache.tools.ant.types.FileSet;
+import org.jenkinsci.remoting.RoleChecker;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 /**
@@ -36,7 +40,7 @@ import org.kohsuke.stapler.DataBoundConstructor;
  * 
  * @author Erik Ramfelt
  */
-public class NUnitPublisher extends Recorder implements Serializable {
+public class NUnitPublisher extends Recorder implements Serializable, SimpleBuildStep {
 
     private static final long serialVersionUID = 1L;
 
@@ -64,12 +68,12 @@ public class NUnitPublisher extends Recorder implements Serializable {
     }
     
     @DataBoundConstructor
-    public NUnitPublisher(String testResultsPattern, boolean debug, boolean keepJUnitReports, boolean skipJUnitArchiver, Boolean failIfNoResults) {
+    public NUnitPublisher(String testResultsPattern, boolean debug, boolean keepJunitReports, boolean skipJunitArchiver, Boolean failIfNoResults) {
         this.testResultsPattern = testResultsPattern;
         this.debug = debug;
         if (this.debug) {
-            this.keepJUnitReports = keepJUnitReports;
-            this.skipJUnitArchiver = skipJUnitArchiver;
+            this.keepJUnitReports = keepJunitReports;
+            this.skipJUnitArchiver = skipJunitArchiver;
         }
         this.failIfNoResults = BooleanUtils.toBooleanDefaultIfNull(failIfNoResults, Boolean.TRUE);
     }
@@ -86,6 +90,7 @@ public class NUnitPublisher extends Recorder implements Serializable {
     public String getTestResultsPattern() {
         return testResultsPattern;
     }
+    
     public void setTestResultsPattern(String pattern){
         this.testResultsPattern = pattern;
     }
@@ -132,6 +137,15 @@ public class NUnitPublisher extends Recorder implements Serializable {
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener)
             throws InterruptedException, IOException {
+        return performInternal(build, build.getWorkspace(), launcher, listener);
+    }
+
+    @Override
+    public void perform(Run<?, ?> build, FilePath filePath, Launcher launcher, TaskListener listener) throws InterruptedException, IOException {
+        performInternal(build, filePath, launcher, listener);
+    }
+
+    private boolean performInternal(Run<?, ?> build, FilePath filePath, Launcher launcher, TaskListener listener) throws InterruptedException, IOException {
         if (debug) {
             listener.getLogger().println("NUnit publisher running in debug mode.");
         }
@@ -142,27 +156,26 @@ public class NUnitPublisher extends Recorder implements Serializable {
 
             listener.getLogger().println("Recording NUnit tests results");
             NUnitArchiver transformer = new NUnitArchiver(listener, resolvedTestResultsPattern, new NUnitReportTransformer(), failIfNoResults);
-            result = build.getWorkspace().act(transformer);
+            result = filePath.act(transformer);
 
             if (result) {
                 if (skipJUnitArchiver) {
                     listener.getLogger().println("Skipping feeding JUnit reports to JUnitArchiver");
                 } else {
                     // Run the JUnit test archiver
-                    result = recordTestResult(NUnitArchiver.JUNIT_REPORTS_PATH + "/TEST-*.xml", build, listener);
+                    result = recordTestResult(NUnitArchiver.JUNIT_REPORTS_PATH + "/TEST-*.xml", build, filePath, listener);
                 }
                 
                 if (keepJUnitReports) {
                     listener.getLogger().println("Skipping deletion of temporary JUnit reports.");
                 } else {
-                    build.getWorkspace().child(NUnitArchiver.JUNIT_REPORTS_PATH).deleteRecursive();
+                    filePath.child(NUnitArchiver.JUNIT_REPORTS_PATH).deleteRecursive();
                 }
             }
             
         } catch (TransformerException te) {
             throw new AbortException("Could not read the XSL XML file. Please report this issue to the plugin author");
         }
-
         return result;
     }
 
@@ -175,7 +188,7 @@ public class NUnitPublisher extends Recorder implements Serializable {
      * @throws InterruptedException
      * @throws IOException
      */
-    private boolean recordTestResult(String junitFilePattern, AbstractBuild<?, ?> build, BuildListener listener)
+    private boolean recordTestResult(String junitFilePattern, Run<?, ?> build, FilePath filePath, TaskListener listener)
             throws InterruptedException, IOException {
         TestResultAction existingAction = build.getAction(TestResultAction.class);
         TestResultAction action;
@@ -186,7 +199,7 @@ public class NUnitPublisher extends Recorder implements Serializable {
         if (existingAction != null) {
             existingTestResults = existingAction.getResult();
         }
-        TestResult result = getTestResult(junitFilePattern, build, existingTestResults, buildTime);
+        TestResult result = getTestResult(junitFilePattern, build, filePath, existingTestResults, buildTime);
 
         if (existingAction == null) {
             action = new TestResultAction(build, result, listener);
@@ -221,9 +234,9 @@ public class NUnitPublisher extends Recorder implements Serializable {
      * @throws IOException
      * @throws InterruptedException
      */
-    private TestResult getTestResult(final String junitFilePattern, AbstractBuild<?, ?> build,
+    private TestResult getTestResult(final String junitFilePattern, Run<?, ?> build, FilePath filePath,
             final TestResult existingTestResults, final long buildTime) throws IOException, InterruptedException {
-        TestResult result = build.getWorkspace().act(new FileCallable<TestResult>() {
+        TestResult result = filePath.act(new FileCallable<TestResult>() {
 			private static final long serialVersionUID = -8917897415838795523L;
 
 			public TestResult invoke(File ws, VirtualChannel channel) throws IOException {
@@ -245,6 +258,11 @@ public class NUnitPublisher extends Recorder implements Serializable {
                     existingTestResults.parse(buildTime, ds);
                     return existingTestResults;
                 }
+            }
+
+            @Override
+            public void checkRoles(RoleChecker rc) throws SecurityException {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
             }
         });
         return result;
